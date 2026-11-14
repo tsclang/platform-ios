@@ -1,0 +1,60 @@
+# Toolchain bundle builder for TSClang's iOS target.
+#
+# libuv (job `libuv`): libuv v1.53.0 built FROM SOURCE (#287) — cmake
+# cross-compiles the 5 mobile slices (ios device + both simulator arches
+# via CMAKE_SYSTEM_NAME=iOS, android arm64/x86_64 via the NDK r30
+# toolchain file) into ONE host-independent asset,
+# `libuv-1.53.0-mobile.tar.gz`, attached to the `toolchains-v1` release.
+# The bytes are identical to the platform-android `toolchains-v2` asset:
+# the mobile bundle is one artifact from one build job, duplicated into
+# this repo so every platform package points at its own repo (follow-up
+# to #287). darwin runner only: iOS slices need Xcode, and the android
+# cross-build works from any host — so the NDK is downloaded too.
+name: bundles
+
+on:
+  workflow_dispatch:
+    inputs:
+      bundle:
+        description: "Which bundle to build: libuv"
+        required: true
+        default: libuv
+
+jobs:
+  libuv:
+    if: inputs.bundle == 'libuv'
+    runs-on: macos-15
+    permissions:
+      contents: write
+    timeout-minutes: 60
+    steps:
+      - name: Checkout compiler repo
+        uses: actions/checkout@v4
+        with:
+          repository: tsclang/tsclang
+          ref: develop
+          path: tsclang
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install cmake/ninja
+        run: brew install cmake ninja
+
+      - name: Build libuv bundle (5 mobile slices)
+        run: node tsclang/packages/registry/scripts/build-bundles.mjs --only libuv --target darwin-arm64
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd tsclang/.tsclang-tmp/bundles/out
+          ls -la
+          gh release view toolchains-v1 -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create toolchains-v1 -R "$GITHUB_REPOSITORY" --title "Toolchains v1" --notes "libuv mobile bundle (#287; built from source, see README)"
+          for f in *; do
+            echo "uploading $f"
+            gh release upload toolchains-v1 "$f" -R "$GITHUB_REPOSITORY" --clobber
+          done
+          shasum -a 256 *
